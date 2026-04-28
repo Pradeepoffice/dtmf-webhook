@@ -4,7 +4,9 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Initialize DB
+# -----------------------------
+# Initialize Database
+# -----------------------------
 def init_db():
     conn = sqlite3.connect("orders.db")
     cursor = conn.cursor()
@@ -13,6 +15,9 @@ def init_db():
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id TEXT,
+        call_sid TEXT,
+        from_number TEXT,
+        to_number TEXT,
         timestamp TEXT
     )
     """)
@@ -22,39 +27,72 @@ def init_db():
 
 init_db()
 
-
+# -----------------------------
+# Health Check
+# -----------------------------
 @app.route('/', methods=['GET'])
 def home():
     return "Webhook is running"
 
-
-@app.route('/receive-digits', methods=['POST'])
+# -----------------------------
+# Main Endpoint (GET + POST)
+# -----------------------------
+@app.route('/receive-digits', methods=['GET', 'POST'])
 def receive_digits():
     try:
-        data = request.form.to_dict()
-        print("Payload:", data)
+        # Handle both GET and POST
+        if request.method == 'POST':
+            data = request.form.to_dict()
+        else:
+            data = request.args.to_dict()
 
-        # Capture full digits (Order ID)
-        order_id = data.get("Digits") or data.get("digits")
+        print("Incoming Payload:", data)
 
-        print("Order ID:", order_id)
+        # Extract values
+        digits = data.get("Digits") or data.get("digits")
+        call_sid = data.get("CallSid")
+        from_number = data.get("From") or data.get("CallFrom")
+        to_number = data.get("To") or data.get("CallTo")
 
-        # Save to DB
-        conn = sqlite3.connect("orders.db")
-        cursor = conn.cursor()
+        # Clean digits (remove quotes if any)
+        if digits:
+            digits = digits.replace('"', '').strip()
 
-        cursor.execute(
-            "INSERT INTO orders (order_id, timestamp) VALUES (?, ?)",
-            (order_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        )
+        print("Order ID:", digits)
+        print("CallSid:", call_sid)
 
-        conn.commit()
-        conn.close()
+        # -----------------------------
+        # Save to Database
+        # -----------------------------
+        if digits:
+            conn = sqlite3.connect("orders.db")
+            cursor = conn.cursor()
 
-        # Response
+            cursor.execute("""
+                INSERT INTO orders (order_id, call_sid, from_number, to_number, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                digits,
+                call_sid,
+                from_number,
+                to_number,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ))
+
+            conn.commit()
+            conn.close()
+
+        # -----------------------------
+        # Response to Exotel
+        # -----------------------------
+        if digits:
+            message = f"Your order ID {digits} has been received"
+        else:
+            message = "No input received"
+
         response_xml = f"""
         <Response>
-            <Say>Your order ID {order_id} has been received</Say>
+            <Say>{message}</Say>
         </Response>
         """
 
@@ -65,10 +103,29 @@ def receive_digits():
 
         return Response("""
         <Response>
-            <Say>Error processing your request</Say>
+            <Say>There was an error processing your request</Say>
         </Response>
         """, mimetype='text/xml')
 
 
+# -----------------------------
+# View Stored Orders (Debug API)
+# -----------------------------
+@app.route('/orders', methods=['GET'])
+def get_orders():
+    conn = sqlite3.connect("orders.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM orders")
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    return {"orders": rows}
+
+
+# -----------------------------
+# Run App
+# -----------------------------
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=3000)
