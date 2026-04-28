@@ -1,39 +1,60 @@
 from flask import Flask, request, Response
+import sqlite3
+from datetime import datetime
 
 app = Flask(__name__)
 
-# Health check
+# Initialize DB
+def init_db():
+    conn = sqlite3.connect("orders.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id TEXT,
+        timestamp TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+
 @app.route('/', methods=['GET'])
 def home():
     return "Webhook is running"
 
-# DTMF receiver endpoint
+
 @app.route('/receive-digits', methods=['POST'])
 def receive_digits():
     try:
-        # Get incoming data from Exotel
         data = request.form.to_dict()
-        print("Incoming Payload:", data)
+        print("Payload:", data)
 
-        # Extract digits
-        digits = data.get("Digits") or data.get("digits") or "No input"
+        # Capture full digits (Order ID)
+        order_id = data.get("Digits") or data.get("digits")
 
-        print("Digits Received:", digits)
+        print("Order ID:", order_id)
 
-        # Simple IVR logic
-        if digits == "1":
-            message = "You selected Sales"
-        elif digits == "2":
-            message = "You selected Support"
-        elif digits == "3":
-            message = "You selected Billing"
-        else:
-            message = f"You pressed {digits}"
+        # Save to DB
+        conn = sqlite3.connect("orders.db")
+        cursor = conn.cursor()
 
-        # XML response (important for Exotel)
+        cursor.execute(
+            "INSERT INTO orders (order_id, timestamp) VALUES (?, ?)",
+            (order_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+
+        conn.commit()
+        conn.close()
+
+        # Response
         response_xml = f"""
         <Response>
-            <Say>{message}</Say>
+            <Say>Your order ID {order_id} has been received</Say>
         </Response>
         """
 
@@ -44,11 +65,10 @@ def receive_digits():
 
         return Response("""
         <Response>
-            <Say>Something went wrong</Say>
+            <Say>Error processing your request</Say>
         </Response>
         """, mimetype='text/xml')
 
 
-# Run locally (Render will ignore this and use gunicorn)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=3000)
